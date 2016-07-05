@@ -1,0 +1,67 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+use Nagios::Plugin;
+
+
+my $np = Nagios::Plugin->new(
+    usage     => "Usage: %s",
+    shortname => 'Reports on iops for all devices',
+);
+
+$np->getopts;
+
+open IN, '</proc/diskstats' or $np->nagios_exit('UNKNOWN', 'Unable to open /proc/diskstats');
+
+my %devices;
+
+while(my $line=<IN>) {
+    chomp($line);
+    $line=trim($line);
+
+    # Fields are defined in this doc:
+    # https://www.kernel.org/doc/Documentation/iostats.txt
+    my @p = split(/\s+/, $line);
+
+    # don't care about partitions or lvms (dm-0, etc.), ram, loop, etc.
+    next if ($p[2]=~m/\d+|ram|loop/);
+
+    my $sector_size = `cat /sys/block/$p[2]/queue/hw_sector_size`;
+    chomp($sector_size);
+
+    print "$p[2]\n";
+    $devices{$p[2]}{'reads'}         = $p[3];
+    $devices{$p[2]}{'bytes_read'}    = $p[5] * $sector_size;
+    $devices{$p[2]}{'writes'}        = $p[7];
+    $devices{$p[2]}{'bytes_written'} = $p[9] * $sector_size;
+}
+close IN;
+
+foreach my $device(sort keys %devices) {
+    $np->add_perfdata(
+        label => "reads_$device",
+        value => $devices{$device}{'reads'},
+    );
+    $np->add_perfdata(
+        label => "writes_$device",
+        value => $devices{$device}{'writes'},
+    );
+    $np->add_perfdata(
+        label => "bytes_read_$device",
+        value => $devices{$device}{'bytes_read'},
+    );
+    $np->add_perfdata(
+        label => "bytes_written_$device",
+        value => $devices{$device}{'bytes_written'},
+    );
+}
+
+$np->nagios_exit('OK', 'IOPS');
+
+sub trim {
+    my $string = shift;
+    $string =~ s/^\s+//;
+    $string =~ s/\s+$//;
+    return $string;
+}
